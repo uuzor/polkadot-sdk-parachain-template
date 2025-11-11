@@ -59,11 +59,12 @@ use xcm::latest::prelude::BodyId;
 // Local module imports
 use super::{
 	weights::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight},
-	AccountId, Aura, Balance, Balances, Block, BlockNumber, CollatorSelection, ConsensusHook, Hash,
-	MessageQueue, Nonce, PalletInfo, ParachainSystem, Runtime, RuntimeCall, RuntimeEvent,
-	RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask, Session, SessionKeys,
-	System, WeightToFee, XcmpQueue, AVERAGE_ON_INITIALIZE_RATIO, EXISTENTIAL_DEPOSIT, HOURS,
-	MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT, NORMAL_DISPATCH_RATIO, SLOT_DURATION, VERSION,
+	AccountId, Aura, Balance, Balances, BattleChain, Block, BlockNumber, CollatorSelection,
+	ConsensusHook, GameOracle, Hash, MessageQueue, Nonce, PalletInfo, ParachainSystem,
+	PredictionMarket, Runtime, RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason,
+	RuntimeOrigin, RuntimeTask, Session, SessionKeys, System, WeightToFee, XcmpQueue,
+	AVERAGE_ON_INITIALIZE_RATIO, EXISTENTIAL_DEPOSIT, HOURS, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT,
+	NORMAL_DISPATCH_RATIO, SLOT_DURATION, VERSION,
 };
 use xcm_config::{RelayLocation, XcmOriginToTransactDispatchOrigin};
 
@@ -320,4 +321,40 @@ impl pallet_collator_selection::Config for Runtime {
 impl pallet_parachain_template::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type WeightInfo = pallet_parachain_template::weights::SubstrateWeight<Runtime>;
+}
+
+// ============================================================================
+// Gaming Prediction Market Platform Pallet Configurations
+// ============================================================================
+
+/// Configure BattleChain pallet
+impl pallet_battlechain::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Currency = Balances;
+	type MaxActiveBattles = ConstU32<10>;
+	type InactivityTimeout = ConstU32<100>; // 100 blocks
+}
+
+/// Configure Prediction Market pallet
+impl pallet_prediction_market::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type PalletId = PredictionMarketPalletId;
+	type PlatformFeeBps = PlatformFeeBps;
+}
+
+/// Configure Game Oracle pallet
+impl pallet_game_oracle::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type PalletId = GameOraclePalletId;
+	type ProviderRevShareBps = ProviderRevShareBps;
+	type QueryFee = OracleQueryFee;
+}
+
+// Helper constants for pallet configurations
+parameter_types! {
+	pub const PredictionMarketPalletId: PalletId = PalletId(*b"predmrkt");
+	pub const GameOraclePalletId: PalletId = PalletId(*b"gameorac");
+	pub const PlatformFeeBps: u16 = 200; // 2%
+	pub const ProviderRevShareBps: u16 = 7000; // 70%
+	pub const OracleQueryFee: Balance = 1000 * MICRO_UNIT; // 0.001 tokens
 }

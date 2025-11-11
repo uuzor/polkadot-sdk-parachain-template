@@ -6,10 +6,13 @@ repository = "https://github.com/paritytech/polkadot-sdk-parachain-template.git"
 edition = "2021"
 
 [workspace]
-default-members = ["pallets/template", "runtime"]
+default-members = ["pallets/template", "pallets/battlechain", "pallets/prediction-market", "pallets/game-oracle", "runtime"]
 members = [
     "node",
     "pallets/template",
+    "pallets/battlechain",
+    "pallets/prediction-market",
+    "pallets/game-oracle",
     "runtime",
 ]
 resolver = "2"
@@ -17,6 +20,9 @@ resolver = "2"
 [workspace.dependencies]
 parachain-template-runtime = { path = "./runtime", default-features = false }
 pallet-parachain-template = { path = "./pallets/template", default-features = false }
+pallet-battlechain = { path = "./pallets/battlechain", default-features = false }
+pallet-prediction-market = { path = "./pallets/prediction-market", default-features = false }
+pallet-game-oracle = { path = "./pallets/game-oracle", default-features = false }
 clap = { version = "4.5.13" }
 color-print = { version = "0.3.4" }
 docify = { version = "0.2.9" }

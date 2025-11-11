@@ -313,6 +313,14 @@ mod runtime {
 	// Template
 	#[runtime::pallet_index(50)]
 	pub type TemplatePallet = pallet_parachain_template;
+
+	// Gaming Prediction Market Platform
+	#[runtime::pallet_index(51)]
+	pub type BattleChain = pallet_battlechain;
+	#[runtime::pallet_index(52)]
+	pub type PredictionMarket = pallet_prediction_market;
+	#[runtime::pallet_index(53)]
+	pub type GameOracle = pallet_game_oracle;
 }
 
 #[docify::export(register_validate_block)]

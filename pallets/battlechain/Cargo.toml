@@ -1,0 +1,28 @@
+[package]
+name = "pallet-battlechain"
+version = "0.1.0"
+edition = "2021"
+license = "MIT-0"
+
+[dependencies]
+codec = { workspace = true, features = ["derive"] }
+scale-info = { workspace = true, features = ["derive"] }
+frame = { workspace = true, features = ["experimental", "runtime"] }
+sp-io = { version = "36.0.0", default-features = false }
+sp-runtime = { version = "41.1.0", default-features = false }
+
+[features]
+default = ["std"]
+std = [
+    "codec/std",
+    "scale-info/std",
+    "frame/std",
+    "sp-io/std",
+    "sp-runtime/std",
+]
+runtime-benchmarks = [
+    "frame/runtime-benchmarks",
+]
+try-runtime = [
+    "frame/try-runtime",
+]
