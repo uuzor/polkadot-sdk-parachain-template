@@ -1,17 +1,24 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-//! # Game Oracle Pallet
+//! # Game Oracle Pallet - Enhanced with Staking & Slashing
 //!
-//! On-chain oracle system for game developers to submit verified game results
-//! and earn revenue when other applications consume their data.
+//! **Trust Model**: Staking + Slashing with dispute period
+//! **Result Format**: Standardized schema with extension field
+//!
+//! ## Architecture:
+//! - Developers must stake tokens to register
+//! - Additional stake required per result submission
+//! - 7-day dispute period for challenges
+//! - Slashing mechanism for fraudulent results
+//! - Revenue sharing: 70% to developer, 30% to protocol
 
 pub use pallet::*;
 
 #[frame::pallet(dev_mode)]
 pub mod pallet {
     use frame::prelude::*;
-    use sp_runtime::traits::{Hash, Zero, AccountIdConversion};
-    use sp_runtime::Saturating;
+    use sp_runtime::traits::{Hash, Zero, AccountIdConversion, Saturating};
+    use sp_runtime::Perbill;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -20,87 +27,141 @@ pub mod pallet {
     pub trait Config: frame_system::Config + pallet_battlechain::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-        /// The pallet's module ID for revenue sharing
+        /// The pallet's module ID for holding funds
         #[pallet::constant]
         type PalletId: Get<frame_support::PalletId>;
 
-        /// Revenue share for data providers (in basis points, e.g., 7000 = 70%)
+        /// Revenue share for data providers (basis points, 7000 = 70%)
         #[pallet::constant]
         type ProviderRevShareBps: Get<u16>;
 
         /// Fee for querying oracle data
         #[pallet::constant]
         type QueryFee: Get<BalanceOf<Self>>;
+
+        /// Required stake for developer registration
+        #[pallet::constant]
+        type DeveloperStake: Get<BalanceOf<Self>>;
+
+        /// Required stake per result submission
+        #[pallet::constant]
+        type ResultStake: Get<BalanceOf<Self>>;
+
+        /// Dispute period in blocks (7 days ≈ 100,800 blocks)
+        #[pallet::constant]
+        type DisputePeriod: Get<BlockNumberFor<Self>>;
+
+        /// Dispute challenge stake (must be >= ResultStake)
+        #[pallet::constant]
+        type DisputeStake: Get<BalanceOf<Self>>;
     }
 
-    // ========== STORAGE ==========
+    // ========== TYPES ==========
 
-    /// Game developer registration status
+    /// Developer registration status
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub enum DeveloperStatus {
-        Pending,
-        Verified,
-        Suspended,
+        Pending,        // Awaiting verification
+        Verified,       // Active and can submit results
+        Suspended,      // Temporarily disabled
+        Slashed,        // Penalized for fraud
     }
 
-    /// Game result status
+    /// Result verification status
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub enum ResultStatus {
-        Submitted,
-        Verified,
-        Disputed,
-        Rejected,
+        Submitted,      // Waiting for dispute period
+        Verified,       // Dispute period passed, data is trusted
+        Disputed,       // Under challenge
+        Slashed,        // Challenge won, developer penalized
     }
 
-    /// Game developer profile
+    /// Dispute outcome
+    #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    pub enum DisputeOutcome {
+        Pending,
+        DeveloperWins,  // Developer keeps stake, challenger loses
+        ChallengerWins, // Developer slashed, challenger gets reward
+    }
+
+    /// Standardized game result format
+    #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    #[scale_info(skip_type_params(T))]
+    pub struct StandardizedResult<T: Config> {
+        // Core fields (standardized)
+        pub battle_id: T::Hash,
+        pub winner: Option<T::AccountId>,
+        pub player1: T::AccountId,
+        pub player2: T::AccountId,
+        pub player1_score: u32,
+        pub player2_score: u32,
+        pub rounds_played: u8,
+        pub timestamp: BlockNumberFor<T>,
+
+        // Metadata
+        pub game_name: BoundedVec<u8, ConstU32<32>>,
+        pub game_version: u32,
+
+        // Extension field for custom data
+        pub extension_data: BoundedVec<u8, ConstU32<256>>,
+    }
+
+    /// Developer profile with staking
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     #[scale_info(skip_type_params(T))]
     pub struct DeveloperProfile<T: Config> {
         pub developer: T::AccountId,
         pub game_name: BoundedVec<u8, ConstU32<64>>,
         pub status: DeveloperStatus,
-        pub reputation_score: u32, // 0-10000 basis points
+        pub reputation_score: u32,          // 0-10000 basis points
+        pub staked_amount: BalanceOf<T>,    // Total stake locked
         pub total_submissions: u64,
+        pub successful_disputes: u32,        // Times they were right in disputes
+        pub failed_disputes: u32,            // Times they were wrong
         pub total_revenue: BalanceOf<T>,
         pub registered_at: BlockNumberFor<T>,
     }
 
-    /// Game result data
+    /// Game result with staking
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     #[scale_info(skip_type_params(T))]
     pub struct GameResult<T: Config> {
         pub result_id: T::Hash,
         pub developer: T::AccountId,
-        pub battle_id: T::Hash,
-        pub winner: Option<T::AccountId>,
-        pub player1_score: u64,
-        pub player2_score: u64,
-        pub data_hash: T::Hash, // Hash of detailed game data
+        pub result_data: StandardizedResult<T>,
+        pub data_hash: T::Hash,              // Hash for integrity verification
+        pub stake_amount: BalanceOf<T>,      // Stake locked for this result
         pub status: ResultStatus,
         pub query_count: u64,
         pub revenue_earned: BalanceOf<T>,
         pub submitted_at: BlockNumberFor<T>,
+        pub dispute_deadline: BlockNumberFor<T>, // When dispute period ends
     }
 
-    /// Dispute record
+    /// Dispute record with staking
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     #[scale_info(skip_type_params(T))]
     pub struct Dispute<T: Config> {
+        pub dispute_id: T::Hash,
         pub result_id: T::Hash,
         pub challenger: T::AccountId,
-        pub stake: BalanceOf<T>,
-        pub reason: BoundedVec<u8, ConstU32<256>>,
-        pub resolved: bool,
-        pub challenge_won: bool,
+        pub challenger_stake: BalanceOf<T>,  // Stake from challenger
+        pub reason: BoundedVec<u8, ConstU32<512>>,
+        pub evidence_hash: T::Hash,          // Hash of evidence data
+        pub outcome: DisputeOutcome,
+        pub resolved_at: Option<BlockNumberFor<T>>,
+        pub created_at: BlockNumberFor<T>,
     }
 
     type BalanceOf<T> = <<T as pallet_battlechain::Config>::Currency as frame::traits::Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+    // ========== STORAGE ==========
 
     /// Registered game developers
     #[pallet::storage]
     pub type Developers<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, DeveloperProfile<T>>;
 
-    /// Game results submitted by developers
+    /// Game results by result ID
     #[pallet::storage]
     pub type Results<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, GameResult<T>>;
 
@@ -112,51 +173,65 @@ pub mod pallet {
     #[pallet::storage]
     pub type Disputes<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, Dispute<T>>;
 
-    /// Pending revenue for developers to claim
+    /// Pending revenue for developers
     #[pallet::storage]
     pub type PendingRevenue<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, BalanceOf<T>, ValueQuery>;
+
+    /// Total staked by developers
+    #[pallet::storage]
+    pub type TotalStaked<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery>;
 
     // ========== EVENTS ==========
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        /// Developer registered [developer, game_name]
+        /// Developer registered [developer, game_name, stake]
         DeveloperRegistered {
             developer: T::AccountId,
             game_name: BoundedVec<u8, ConstU32<64>>,
+            stake: BalanceOf<T>,
         },
-        /// Developer verified [developer]
+        /// Developer verified by governance [developer]
         DeveloperVerified {
             developer: T::AccountId,
         },
-        /// Game result submitted [result_id, developer, battle_id]
+        /// Result submitted [result_id, developer, battle_id, stake]
         ResultSubmitted {
             result_id: T::Hash,
             developer: T::AccountId,
             battle_id: T::Hash,
+            stake: BalanceOf<T>,
         },
-        /// Game result verified [result_id]
+        /// Result verified after dispute period [result_id]
         ResultVerified {
             result_id: T::Hash,
         },
-        /// Data queried [result_id, querier, fee_paid, provider_revenue]
+        /// Data queried [result_id, querier, fee, developer_revenue]
         DataQueried {
             result_id: T::Hash,
             querier: T::AccountId,
-            fee_paid: BalanceOf<T>,
-            provider_revenue: BalanceOf<T>,
+            fee: BalanceOf<T>,
+            developer_revenue: BalanceOf<T>,
         },
-        /// Dispute created [result_id, challenger, stake]
+        /// Dispute created [dispute_id, result_id, challenger, stake]
         DisputeCreated {
+            dispute_id: T::Hash,
             result_id: T::Hash,
             challenger: T::AccountId,
             stake: BalanceOf<T>,
         },
-        /// Dispute resolved [result_id, challenger_won]
+        /// Dispute resolved [dispute_id, outcome, slashed_amount]
         DisputeResolved {
+            dispute_id: T::Hash,
+            outcome: DisputeOutcome,
+            slashed_amount: BalanceOf<T>,
+        },
+        /// Developer slashed [developer, result_id, amount]
+        DeveloperSlashed {
+            developer: T::AccountId,
             result_id: T::Hash,
-            challenger_won: bool,
+            amount: BalanceOf<T>,
         },
         /// Revenue claimed [developer, amount]
         RevenueClaimed {
@@ -169,35 +244,29 @@ pub mod pallet {
 
     #[pallet::error]
     pub enum Error<T> {
-        /// Developer already registered
         DeveloperAlreadyRegistered,
-        /// Developer not found
         DeveloperNotFound,
-        /// Developer not verified
         DeveloperNotVerified,
-        /// Result not found
+        DeveloperSlashed,
         ResultNotFound,
-        /// Result already exists for this battle
         ResultAlreadyExists,
-        /// Battle not found
         BattleNotFound,
-        /// Insufficient query fee
-        InsufficientQueryFee,
-        /// Dispute already exists
+        InsufficientStake,
         DisputeAlreadyExists,
-        /// Dispute not found
         DisputeNotFound,
-        /// No revenue to claim
+        DisputePeriodNotEnded,
+        DisputePeriodEnded,
         NoRevenueToClaim,
-        /// Invalid game name
         InvalidGameName,
+        ResultStillDisputed,
+        UnauthorizedResolver,
     }
 
     // ========== EXTRINSICS ==========
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        /// Register as a game developer
+        /// Register as a game developer (requires staking)
         #[pallet::call_index(0)]
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn register_developer(
@@ -212,27 +281,42 @@ pub mod pallet {
             );
             ensure!(!game_name.is_empty(), Error::<T>::InvalidGameName);
 
+            let stake = T::DeveloperStake::get();
+
+            // Lock developer stake
+            <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                &who,
+                &Self::account_id(),
+                stake,
+                frame_support::traits::ExistenceRequirement::KeepAlive,
+            )?;
+
             let profile = DeveloperProfile {
                 developer: who.clone(),
                 game_name: game_name.clone(),
                 status: DeveloperStatus::Pending,
                 reputation_score: 5000, // Start at 50%
+                staked_amount: stake,
                 total_submissions: 0,
+                successful_disputes: 0,
+                failed_disputes: 0,
                 total_revenue: Zero::zero(),
                 registered_at: frame_system::Pallet::<T>::block_number(),
             };
 
             Developers::<T>::insert(&who, profile);
+            TotalStaked::<T>::mutate(|total| *total = total.saturating_add(stake));
 
             Self::deposit_event(Event::DeveloperRegistered {
                 developer: who,
                 game_name,
+                stake,
             });
 
             Ok(())
         }
 
-        /// Verify a developer (requires governance or authority)
+        /// Verify a developer (governance only)
         #[pallet::call_index(1)]
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn verify_developer(
@@ -253,16 +337,12 @@ pub mod pallet {
             })
         }
 
-        /// Submit game result
+        /// Submit standardized game result (requires additional stake)
         #[pallet::call_index(2)]
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn submit_result(
             origin: OriginFor<T>,
-            battle_id: T::Hash,
-            winner: Option<T::AccountId>,
-            player1_score: u64,
-            player2_score: u64,
-            data_hash: T::Hash,
+            result_data: StandardizedResult<T>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
@@ -273,54 +353,118 @@ pub mod pallet {
             );
 
             // Ensure battle exists
-            let battle = pallet_battlechain::Battles::<T>::get(battle_id)
+            let _battle = pallet_battlechain::Battles::<T>::get(result_data.battle_id)
                 .ok_or(Error::<T>::BattleNotFound)?;
 
-            // Ensure result doesn't already exist
             ensure!(
-                !BattleResults::<T>::contains_key(battle_id),
+                !BattleResults::<T>::contains_key(result_data.battle_id),
                 Error::<T>::ResultAlreadyExists
             );
 
-            // Generate result ID
-            let result_id = T::Hashing::hash_of(&(&battle_id, &who, &frame_system::Pallet::<T>::block_number()));
+            let result_stake = T::ResultStake::get();
+
+            // Lock result stake
+            <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                &who,
+                &Self::account_id(),
+                result_stake,
+                frame_support::traits::ExistenceRequirement::KeepAlive,
+            )?;
+
+            let result_id = T::Hashing::hash_of(&(&result_data.battle_id, &who, &frame_system::Pallet::<T>::block_number()));
+            let data_hash = T::Hashing::hash_of(&result_data);
+            let now = frame_system::Pallet::<T>::block_number();
+            let dispute_deadline = now.saturating_add(T::DisputePeriod::get());
 
             let result = GameResult {
                 result_id,
                 developer: who.clone(),
-                battle_id,
-                winner: winner.clone(),
-                player1_score,
-                player2_score,
+                result_data,
                 data_hash,
+                stake_amount: result_stake,
                 status: ResultStatus::Submitted,
                 query_count: 0,
                 revenue_earned: Zero::zero(),
-                submitted_at: frame_system::Pallet::<T>::block_number(),
+                submitted_at: now,
+                dispute_deadline,
             };
 
             Results::<T>::insert(result_id, result);
-            BattleResults::<T>::insert(battle_id, result_id);
+            BattleResults::<T>::insert(result.result_data.battle_id, result_id);
 
-            // Update developer stats
             Developers::<T>::try_mutate(&who, |maybe_profile| {
                 if let Some(profile) = maybe_profile {
                     profile.total_submissions = profile.total_submissions.saturating_add(1);
+                    profile.staked_amount = profile.staked_amount.saturating_add(result_stake);
                 }
                 Ok::<(), DispatchError>(())
             })?;
 
+            TotalStaked::<T>::mutate(|total| *total = total.saturating_add(result_stake));
+
             Self::deposit_event(Event::ResultSubmitted {
                 result_id,
                 developer: who,
-                battle_id,
+                battle_id: result.result_data.battle_id,
+                stake: result_stake,
             });
 
             Ok(())
         }
 
-        /// Query game result data (pays fee to developer)
+        /// Finalize result after dispute period
         #[pallet::call_index(3)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        pub fn finalize_result(
+            origin: OriginFor<T>,
+            result_id: T::Hash,
+        ) -> DispatchResult {
+            let _who = ensure_signed(origin)?;
+
+            Results::<T>::try_mutate(result_id, |maybe_result| {
+                let result = maybe_result.as_mut().ok_or(Error::<T>::ResultNotFound)?;
+
+                ensure!(
+                    result.status == ResultStatus::Submitted,
+                    Error::<T>::ResultStillDisputed
+                );
+
+                let now = frame_system::Pallet::<T>::block_number();
+                ensure!(
+                    now >= result.dispute_deadline,
+                    Error::<T>::DisputePeriodNotEnded
+                );
+
+                result.status = ResultStatus::Verified;
+
+                // Return stake to developer
+                let developer = result.developer.clone();
+                let stake = result.stake_amount;
+
+                <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                    &Self::account_id(),
+                    &developer,
+                    stake,
+                    frame_support::traits::ExistenceRequirement::AllowDeath,
+                )?;
+
+                Developers::<T>::try_mutate(&developer, |maybe_profile| {
+                    if let Some(profile) = maybe_profile {
+                        profile.staked_amount = profile.staked_amount.saturating_sub(stake);
+                    }
+                    Ok::<(), DispatchError>(())
+                })?;
+
+                TotalStaked::<T>::mutate(|total| *total = total.saturating_sub(stake));
+
+                Self::deposit_event(Event::ResultVerified { result_id });
+
+                Ok(())
+            })
+        }
+
+        /// Query game result data (pays fee)
+        #[pallet::call_index(4)]
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn query_result(
             origin: OriginFor<T>,
@@ -335,7 +479,7 @@ pub mod pallet {
 
                 // Calculate revenue split
                 let provider_share_bps = T::ProviderRevShareBps::get() as u128;
-                let provider_revenue = sp_runtime::Permill::from_rational(provider_share_bps, 10000u128)
+                let provider_revenue = Perbill::from_rational(provider_share_bps, 10000u128)
                     .mul_floor(query_fee);
 
                 // Transfer query fee
@@ -351,56 +495,64 @@ pub mod pallet {
                     *balance = balance.saturating_add(provider_revenue);
                 });
 
-                // Update result stats
                 result.query_count = result.query_count.saturating_add(1);
                 result.revenue_earned = result.revenue_earned.saturating_add(provider_revenue);
 
                 Self::deposit_event(Event::DataQueried {
                     result_id,
                     querier: who,
-                    fee_paid: query_fee,
-                    provider_revenue,
+                    fee: query_fee,
+                    developer_revenue: provider_revenue,
                 });
 
                 Ok(())
             })
         }
 
-        /// Create a dispute for a result
-        #[pallet::call_index(4)]
+        /// Create dispute (requires stake)
+        #[pallet::call_index(5)]
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn create_dispute(
             origin: OriginFor<T>,
             result_id: T::Hash,
-            stake: BalanceOf<T>,
-            reason: BoundedVec<u8, ConstU32<256>>,
+            reason: BoundedVec<u8, ConstU32<512>>,
+            evidence_hash: T::Hash,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
-            ensure!(
-                !Disputes::<T>::contains_key(result_id),
-                Error::<T>::DisputeAlreadyExists
-            );
             let result = Results::<T>::get(result_id).ok_or(Error::<T>::ResultNotFound)?;
 
-            // Lock stake
+            let now = frame_system::Pallet::<T>::block_number();
+            ensure!(
+                now < result.dispute_deadline,
+                Error::<T>::DisputePeriodEnded
+            );
+
+            let dispute_stake = T::DisputeStake::get();
+
+            // Lock challenger stake
             <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
                 &who,
                 &Self::account_id(),
-                stake,
+                dispute_stake,
                 frame_support::traits::ExistenceRequirement::KeepAlive,
             )?;
 
+            let dispute_id = T::Hashing::hash_of(&(&result_id, &who, &now));
+
             let dispute = Dispute {
+                dispute_id,
                 result_id,
                 challenger: who.clone(),
-                stake,
+                challenger_stake: dispute_stake,
                 reason,
-                resolved: false,
-                challenge_won: false,
+                evidence_hash,
+                outcome: DisputeOutcome::Pending,
+                resolved_at: None,
+                created_at: now,
             };
 
-            Disputes::<T>::insert(result_id, dispute);
+            Disputes::<T>::insert(dispute_id, dispute);
 
             // Mark result as disputed
             Results::<T>::try_mutate(result_id, |maybe_result| {
@@ -411,16 +563,123 @@ pub mod pallet {
             })?;
 
             Self::deposit_event(Event::DisputeCreated {
+                dispute_id,
                 result_id,
                 challenger: who,
-                stake,
+                stake: dispute_stake,
             });
 
             Ok(())
         }
 
+        /// Resolve dispute (governance only)
+        #[pallet::call_index(6)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        pub fn resolve_dispute(
+            origin: OriginFor<T>,
+            dispute_id: T::Hash,
+            challenger_wins: bool,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+
+            Disputes::<T>::try_mutate(dispute_id, |maybe_dispute| {
+                let dispute = maybe_dispute.as_mut().ok_or(Error::<T>::DisputeNotFound)?;
+
+                let outcome = if challenger_wins {
+                    DisputeOutcome::ChallengerWins
+                } else {
+                    DisputeOutcome::DeveloperWins
+                };
+
+                dispute.outcome = outcome.clone();
+                dispute.resolved_at = Some(frame_system::Pallet::<T>::block_number());
+
+                let result_id = dispute.result_id;
+                let challenger = dispute.challenger.clone();
+                let challenger_stake = dispute.challenger_stake;
+
+                // Get result and developer
+                let result = Results::<T>::get(result_id).ok_or(Error::<T>::ResultNotFound)?;
+                let developer = result.developer.clone();
+                let result_stake = result.stake_amount;
+
+                if challenger_wins {
+                    // Slash developer, reward challenger
+                    let total_pot = result_stake.saturating_add(challenger_stake);
+
+                    // Challenger gets their stake back + developer's stake
+                    <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                        &Self::account_id(),
+                        &challenger,
+                        total_pot,
+                        frame_support::traits::ExistenceRequirement::AllowDeath,
+                    )?;
+
+                    // Update developer
+                    Developers::<T>::try_mutate(&developer, |maybe_profile| {
+                        if let Some(profile) = maybe_profile {
+                            profile.staked_amount = profile.staked_amount.saturating_sub(result_stake);
+                            profile.failed_disputes = profile.failed_disputes.saturating_add(1);
+                            profile.status = DeveloperStatus::Slashed;
+                        }
+                        Ok::<(), DispatchError>(())
+                    })?;
+
+                    // Mark result as slashed
+                    Results::<T>::try_mutate(result_id, |maybe_result| {
+                        if let Some(result) = maybe_result {
+                            result.status = ResultStatus::Slashed;
+                        }
+                        Ok::<(), DispatchError>(())
+                    })?;
+
+                    Self::deposit_event(Event::DeveloperSlashed {
+                        developer: developer.clone(),
+                        result_id,
+                        amount: result_stake,
+                    });
+                } else {
+                    // Developer wins, gets challenger's stake
+                    let total_pot = result_stake.saturating_add(challenger_stake);
+
+                    <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                        &Self::account_id(),
+                        &developer,
+                        total_pot,
+                        frame_support::traits::ExistenceRequirement::AllowDeath,
+                    )?;
+
+                    Developers::<T>::try_mutate(&developer, |maybe_profile| {
+                        if let Some(profile) = maybe_profile {
+                            profile.staked_amount = profile.staked_amount.saturating_sub(result_stake);
+                            profile.successful_disputes = profile.successful_disputes.saturating_add(1);
+                        }
+                        Ok::<(), DispatchError>(())
+                    })?;
+
+                    // Mark result as verified
+                    Results::<T>::try_mutate(result_id, |maybe_result| {
+                        if let Some(result) = maybe_result {
+                            result.status = ResultStatus::Verified;
+                        }
+                        Ok::<(), DispatchError>(())
+                    })?;
+                }
+
+                TotalStaked::<T>::mutate(|total| *total = total.saturating_sub(result_stake.saturating_add(challenger_stake)));
+
+                Self::deposit_event(Event::DisputeResolved {
+                    dispute_id,
+                    outcome,
+                    slashed_amount: if challenger_wins { result_stake } else { Zero::zero() },
+                });
+
+                Ok(())
+            })
+        }
+
         /// Claim pending revenue
-        #[pallet::call_index(5)]
+        #[pallet::call_index(7)]
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn claim_revenue(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
@@ -428,7 +687,6 @@ pub mod pallet {
             let amount = PendingRevenue::<T>::take(&who);
             ensure!(amount > Zero::zero(), Error::<T>::NoRevenueToClaim);
 
-            // Transfer revenue
             <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
                 &Self::account_id(),
                 &who,
@@ -436,7 +694,6 @@ pub mod pallet {
                 frame_support::traits::ExistenceRequirement::AllowDeath,
             )?;
 
-            // Update developer total revenue
             Developers::<T>::try_mutate(&who, |maybe_profile| {
                 if let Some(profile) = maybe_profile {
                     profile.total_revenue = profile.total_revenue.saturating_add(amount);
@@ -456,7 +713,7 @@ pub mod pallet {
     // ========== HELPER FUNCTIONS ==========
 
     impl<T: Config> Pallet<T> {
-        /// Get the account ID of the pallet for holding funds
+        /// Get the pallet's account ID
         pub fn account_id() -> T::AccountId {
             T::PalletId::get().into_account_truncating()
         }
