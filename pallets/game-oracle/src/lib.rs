@@ -69,6 +69,27 @@ pub mod pallet {
         Slashed,        // Penalized for fraud
     }
 
+    impl DeveloperStatus {
+        pub fn to_u8(&self) -> u8 {
+            match self {
+                DeveloperStatus::Pending => 0,
+                DeveloperStatus::Verified => 1,
+                DeveloperStatus::Suspended => 2,
+                DeveloperStatus::Slashed => 3,
+            }
+        }
+
+        pub fn from_u8(value: u8) -> Result<Self, ()> {
+            match value {
+                0 => Ok(DeveloperStatus::Pending),
+                1 => Ok(DeveloperStatus::Verified),
+                2 => Ok(DeveloperStatus::Suspended),
+                3 => Ok(DeveloperStatus::Slashed),
+                _ => Err(()),
+            }
+        }
+    }
+
     /// Result verification status
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub enum ResultStatus {
@@ -78,12 +99,52 @@ pub mod pallet {
         Slashed,        // Challenge won, developer penalized
     }
 
+    impl ResultStatus {
+        pub fn to_u8(&self) -> u8 {
+            match self {
+                ResultStatus::Submitted => 0,
+                ResultStatus::Verified => 1,
+                ResultStatus::Disputed => 2,
+                ResultStatus::Slashed => 3,
+            }
+        }
+
+        pub fn from_u8(value: u8) -> Result<Self, ()> {
+            match value {
+                0 => Ok(ResultStatus::Submitted),
+                1 => Ok(ResultStatus::Verified),
+                2 => Ok(ResultStatus::Disputed),
+                3 => Ok(ResultStatus::Slashed),
+                _ => Err(()),
+            }
+        }
+    }
+
     /// Dispute outcome
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub enum DisputeOutcome {
         Pending,
         DeveloperWins,  // Developer keeps stake, challenger loses
         ChallengerWins, // Developer slashed, challenger gets reward
+    }
+
+    impl DisputeOutcome {
+        pub fn to_u8(&self) -> u8 {
+            match self {
+                DisputeOutcome::Pending => 0,
+                DisputeOutcome::DeveloperWins => 1,
+                DisputeOutcome::ChallengerWins => 2,
+            }
+        }
+
+        pub fn from_u8(value: u8) -> Result<Self, ()> {
+            match value {
+                0 => Ok(DisputeOutcome::Pending),
+                1 => Ok(DisputeOutcome::DeveloperWins),
+                2 => Ok(DisputeOutcome::ChallengerWins),
+                _ => Err(()),
+            }
+        }
     }
 
     /// Standardized game result format
@@ -223,10 +284,10 @@ pub mod pallet {
             challenger: T::AccountId,
             stake: BalanceOf<T>,
         },
-        /// Dispute resolved [dispute_id, outcome, slashed_amount]
+        /// Dispute resolved [dispute_id, outcome_id, slashed_amount]
         DisputeResolved {
             dispute_id: T::Hash,
-            outcome: DisputeOutcome,
+            outcome_id: u8,
             slashed_amount: BalanceOf<T>,
         },
         /// Developer slashed [developer, result_id, amount]
@@ -378,6 +439,8 @@ pub mod pallet {
             let now = frame_system::Pallet::<T>::block_number();
             let dispute_deadline = now.saturating_add(T::DisputePeriod::get());
 
+            let battle_id = result_data.battle_id;
+
             let result = GameResult {
                 result_id,
                 developer: who.clone(),
@@ -392,7 +455,7 @@ pub mod pallet {
             };
 
             Results::<T>::insert(result_id, result);
-            BattleResults::<T>::insert(result.result_data.battle_id, result_id);
+            BattleResults::<T>::insert(battle_id, result_id);
 
             Developers::<T>::try_mutate(&who, |maybe_profile| {
                 if let Some(profile) = maybe_profile {
@@ -407,7 +470,7 @@ pub mod pallet {
             Self::deposit_event(Event::ResultSubmitted {
                 result_id,
                 developer: who,
-                battle_id: result.result_data.battle_id,
+                battle_id,
                 stake: result_stake,
             });
 
@@ -672,7 +735,7 @@ pub mod pallet {
 
                 Self::deposit_event(Event::DisputeResolved {
                     dispute_id,
-                    outcome,
+                    outcome_id: outcome.to_u8(),
                     slashed_amount: if challenger_wins { result_stake } else { Zero::zero() },
                 });
 

@@ -41,6 +41,25 @@ pub mod pallet {
         Draw,
     }
 
+    impl MarketOutcome {
+        pub fn to_u8(&self) -> u8 {
+            match self {
+                MarketOutcome::Player1Wins => 0,
+                MarketOutcome::Player2Wins => 1,
+                MarketOutcome::Draw => 2,
+            }
+        }
+
+        pub fn from_u8(value: u8) -> Result<Self, ()> {
+            match value {
+                0 => Ok(MarketOutcome::Player1Wins),
+                1 => Ok(MarketOutcome::Player2Wins),
+                2 => Ok(MarketOutcome::Draw),
+                _ => Err(()),
+            }
+        }
+    }
+
     /// Market state
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub enum MarketState {
@@ -50,6 +69,27 @@ pub mod pallet {
         Cancelled,
     }
 
+    impl MarketState {
+        pub fn to_u8(&self) -> u8 {
+            match self {
+                MarketState::Open => 0,
+                MarketState::Locked => 1,
+                MarketState::Resolved => 2,
+                MarketState::Cancelled => 3,
+            }
+        }
+
+        pub fn from_u8(value: u8) -> Result<Self, ()> {
+            match value {
+                0 => Ok(MarketState::Open),
+                1 => Ok(MarketState::Locked),
+                2 => Ok(MarketState::Resolved),
+                3 => Ok(MarketState::Cancelled),
+                _ => Err(()),
+            }
+        }
+    }
+
     /// Prediction market data
     #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     #[scale_info(skip_type_params(T))]
@@ -57,12 +97,12 @@ pub mod pallet {
         pub market_id: T::Hash,
         pub battle_id: T::Hash,
         pub creator: T::AccountId,
-        pub state: MarketState,
+        pub state_id: u8,             // 0=Open, 1=Locked, 2=Resolved, 3=Cancelled
         pub total_pool: BalanceOf<T>,
         pub player1_pool: BalanceOf<T>,
         pub player2_pool: BalanceOf<T>,
         pub draw_pool: BalanceOf<T>,
-        pub outcome: Option<MarketOutcome>,
+        pub outcome_id: Option<u8>,   // 0=Player1Wins, 1=Player2Wins, 2=Draw
         pub created_at: BlockNumberFor<T>,
         pub resolve_block: Option<BlockNumberFor<T>>,
     }
@@ -73,7 +113,7 @@ pub mod pallet {
     pub struct Prediction<T: Config> {
         pub predictor: T::AccountId,
         pub market_id: T::Hash,
-        pub outcome: MarketOutcome,
+        pub outcome_id: u8,           // 0=Player1Wins, 1=Player2Wins, 2=Draw
         pub amount: BalanceOf<T>,
         pub claimed: bool,
     }
@@ -115,21 +155,21 @@ pub mod pallet {
             battle_id: T::Hash,
             creator: T::AccountId,
         },
-        /// Prediction placed [market_id, predictor, outcome, amount]
+        /// Prediction placed [market_id, predictor, outcome_id, amount]
         PredictionPlaced {
             market_id: T::Hash,
             predictor: T::AccountId,
-            outcome: MarketOutcome,
+            outcome_id: u8,
             amount: BalanceOf<T>,
         },
         /// Market locked [market_id]
         MarketLocked {
             market_id: T::Hash,
         },
-        /// Market resolved [market_id, outcome, total_pool]
+        /// Market resolved [market_id, outcome_id, total_pool]
         MarketResolved {
             market_id: T::Hash,
-            outcome: MarketOutcome,
+            outcome_id: u8,
             total_pool: BalanceOf<T>,
         },
         /// Winnings claimed [market_id, predictor, payout]
@@ -166,6 +206,8 @@ pub mod pallet {
         BattleNotFinished,
         /// Market not locked
         MarketNotLocked,
+        /// Invalid outcome ID
+        InvalidOutcome,
     }
 
     // ========== EXTRINSICS ==========
@@ -202,12 +244,12 @@ pub mod pallet {
                 market_id,
                 battle_id,
                 creator: who.clone(),
-                state: MarketState::Open,
+                state_id: MarketState::Open.to_u8(),
                 total_pool: Zero::zero(),
                 player1_pool: Zero::zero(),
                 player2_pool: Zero::zero(),
                 draw_pool: Zero::zero(),
-                outcome: None,
+                outcome_id: None,
                 created_at: frame_system::Pallet::<T>::block_number(),
                 resolve_block: None,
             };
@@ -230,14 +272,21 @@ pub mod pallet {
         pub fn place_prediction(
             origin: OriginFor<T>,
             market_id: T::Hash,
-            outcome: MarketOutcome,
+            outcome_id: u8,
             amount: BalanceOf<T>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
+            // Validate outcome_id
+            let outcome = MarketOutcome::from_u8(outcome_id)
+                .map_err(|_| Error::<T>::InvalidOutcome)?;
+
             Markets::<T>::try_mutate(market_id, |maybe_market| {
                 let market = maybe_market.as_mut().ok_or(Error::<T>::MarketNotFound)?;
-                ensure!(market.state == MarketState::Open, Error::<T>::MarketNotOpen);
+
+                let market_state = MarketState::from_u8(market.state_id)
+                    .map_err(|_| Error::<T>::MarketNotFound)?;
+                ensure!(market_state == MarketState::Open, Error::<T>::MarketNotOpen);
 
                 // Transfer funds to pallet account
                 T::Currency::transfer(
@@ -268,7 +317,7 @@ pub mod pallet {
                     Prediction {
                         predictor: who.clone(),
                         market_id,
-                        outcome: outcome.clone(),
+                        outcome_id,
                         amount,
                         claimed: false,
                     },
@@ -277,7 +326,7 @@ pub mod pallet {
                 Self::deposit_event(Event::PredictionPlaced {
                     market_id,
                     predictor: who,
-                    outcome,
+                    outcome_id,
                     amount,
                 });
 
@@ -296,9 +345,12 @@ pub mod pallet {
 
             Markets::<T>::try_mutate(market_id, |maybe_market| {
                 let market = maybe_market.as_mut().ok_or(Error::<T>::MarketNotFound)?;
-                ensure!(market.state == MarketState::Open, Error::<T>::MarketNotOpen);
 
-                market.state = MarketState::Locked;
+                let market_state = MarketState::from_u8(market.state_id)
+                    .map_err(|_| Error::<T>::MarketNotFound)?;
+                ensure!(market_state == MarketState::Open, Error::<T>::MarketNotOpen);
+
+                market.state_id = MarketState::Locked.to_u8();
 
                 Self::deposit_event(Event::MarketLocked { market_id });
 
@@ -317,7 +369,10 @@ pub mod pallet {
 
             Markets::<T>::try_mutate(market_id, |maybe_market| {
                 let market = maybe_market.as_mut().ok_or(Error::<T>::MarketNotFound)?;
-                ensure!(market.state == MarketState::Locked, Error::<T>::MarketNotLocked);
+
+                let market_state = MarketState::from_u8(market.state_id)
+                    .map_err(|_| Error::<T>::MarketNotFound)?;
+                ensure!(market_state == MarketState::Locked, Error::<T>::MarketNotLocked);
 
                 // Get battle outcome
                 let battle = pallet_battlechain::Battles::<T>::get(market.battle_id)
@@ -336,13 +391,13 @@ pub mod pallet {
                     MarketOutcome::Draw
                 };
 
-                market.outcome = Some(outcome.clone());
-                market.state = MarketState::Resolved;
+                market.outcome_id = Some(outcome.to_u8());
+                market.state_id = MarketState::Resolved.to_u8();
                 market.resolve_block = Some(frame_system::Pallet::<T>::block_number());
 
                 Self::deposit_event(Event::MarketResolved {
                     market_id,
-                    outcome,
+                    outcome_id: outcome.to_u8(),
                     total_pool: market.total_pool,
                 });
 
@@ -360,15 +415,21 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
 
             let market = Markets::<T>::get(market_id).ok_or(Error::<T>::MarketNotFound)?;
-            ensure!(market.state == MarketState::Resolved, Error::<T>::MarketNotResolved);
+
+            let market_state = MarketState::from_u8(market.state_id)
+                .map_err(|_| Error::<T>::MarketNotFound)?;
+            ensure!(market_state == MarketState::Resolved, Error::<T>::MarketNotResolved);
 
             Predictions::<T>::try_mutate(market_id, &who, |maybe_prediction| {
                 let prediction = maybe_prediction.as_mut().ok_or(Error::<T>::PredictionNotFound)?;
                 ensure!(!prediction.claimed, Error::<T>::AlreadyClaimed);
 
                 // Check if prediction was correct
-                let outcome = market.outcome.as_ref().ok_or(Error::<T>::MarketNotResolved)?;
-                ensure!(&prediction.outcome == outcome, Error::<T>::NoWinnings);
+                let outcome_id = market.outcome_id.ok_or(Error::<T>::MarketNotResolved)?;
+                ensure!(prediction.outcome_id == outcome_id, Error::<T>::NoWinnings);
+
+                let outcome = MarketOutcome::from_u8(outcome_id)
+                    .map_err(|_| Error::<T>::InvalidOutcome)?;
 
                 // Calculate payout
                 let winning_pool = match outcome {
@@ -400,7 +461,7 @@ pub mod pallet {
 
                 Self::deposit_event(Event::WinningsClaimed {
                     market_id,
-                    predictor: who,
+                    predictor: who.clone(),
                     payout: user_share,
                 });
 

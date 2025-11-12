@@ -63,7 +63,7 @@ use super::{
 	ConsensusHook, GameOracle, Hash, MessageQueue, Nonce, PalletInfo, ParachainSystem,
 	PredictionMarket, Runtime, RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason,
 	RuntimeOrigin, RuntimeTask, Session, SessionKeys, System, WeightToFee, XcmpQueue,
-	AVERAGE_ON_INITIALIZE_RATIO, EXISTENTIAL_DEPOSIT, HOURS, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT,
+	AVERAGE_ON_INITIALIZE_RATIO, EXISTENTIAL_DEPOSIT, HOURS, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT, UNIT,
 	NORMAL_DISPATCH_RATIO, SLOT_DURATION, VERSION,
 };
 use xcm_config::{RelayLocation, XcmOriginToTransactDispatchOrigin};
@@ -346,6 +346,10 @@ impl pallet_game_oracle::Config for Runtime {
 	type PalletId = GameOraclePalletId;
 	type ProviderRevShareBps = ProviderRevShareBps;
 	type QueryFee = OracleQueryFee;
+	type DeveloperStake = DeveloperStakeAmount;
+	type ResultStake = ResultStakeAmount;
+	type DisputePeriod = DisputePeriodBlocks;
+	type DisputeStake = DisputeStakeAmount;
 }
 
 // Helper constants for pallet configurations
@@ -355,4 +359,8 @@ parameter_types! {
 	pub const PlatformFeeBps: u16 = 200; // 2%
 	pub const ProviderRevShareBps: u16 = 7000; // 70%
 	pub const OracleQueryFee: Balance = 1000 * MICRO_UNIT; // 0.001 tokens
+	pub const DeveloperStakeAmount: Balance = 100 * UNIT; // 100 tokens to register
+	pub const ResultStakeAmount: Balance = 10 * UNIT; // 10 tokens per result
+	pub const DisputePeriodBlocks: BlockNumber = 100_800; // 7 days (~6 sec blocks)
+	pub const DisputeStakeAmount: Balance = 20 * UNIT; // 20 tokens to challenge
 }
