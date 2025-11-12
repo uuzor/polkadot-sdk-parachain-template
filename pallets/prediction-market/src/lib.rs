@@ -7,9 +7,11 @@
 
 pub use pallet::*;
 
-#[frame::pallet(dev_mode)]
+#[frame::pallet]
 pub mod pallet {
     use frame::prelude::*;
+    use frame::traits::Currency;
+    use frame::deps::frame_support;
     use sp_runtime::traits::{Hash, Zero, AccountIdConversion};
     use sp_runtime::{Saturating, Permill};
 
@@ -238,7 +240,7 @@ pub mod pallet {
                 ensure!(market.state == MarketState::Open, Error::<T>::MarketNotOpen);
 
                 // Transfer funds to pallet account
-                <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                T::Currency::transfer(
                     &who,
                     &Self::account_id(),
                     amount,
@@ -325,13 +327,11 @@ pub mod pallet {
                     Error::<T>::BattleNotFinished
                 );
 
-                // Determine outcome
-                let outcome = if let Some(ref winner) = battle.winner {
-                    if winner == &battle.player1 {
-                        MarketOutcome::Player1Wins
-                    } else {
-                        MarketOutcome::Player2Wins
-                    }
+                // Determine outcome based on rounds won
+                let outcome = if battle.player1_rounds_won > battle.player2_rounds_won {
+                    MarketOutcome::Player1Wins
+                } else if battle.player2_rounds_won > battle.player1_rounds_won {
+                    MarketOutcome::Player2Wins
                 } else {
                     MarketOutcome::Draw
                 };
@@ -389,7 +389,7 @@ pub mod pallet {
                 let user_share = prediction.amount.saturating_mul(total_after_fee.into()) / winning_pool;
 
                 // Transfer winnings
-                <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                T::Currency::transfer(
                     &Self::account_id(),
                     &who,
                     user_share,

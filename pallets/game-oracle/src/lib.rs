@@ -14,9 +14,11 @@
 
 pub use pallet::*;
 
-#[frame::pallet(dev_mode)]
+#[frame::pallet]
 pub mod pallet {
     use frame::prelude::*;
+    use frame::traits::Currency;
+    use frame::deps::frame_support;
     use sp_runtime::traits::{Hash, Zero, AccountIdConversion, Saturating};
     use sp_runtime::Perbill;
 
@@ -284,7 +286,7 @@ pub mod pallet {
             let stake = T::DeveloperStake::get();
 
             // Lock developer stake
-            <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+            T::Currency::transfer(
                 &who,
                 &Self::account_id(),
                 stake,
@@ -364,7 +366,7 @@ pub mod pallet {
             let result_stake = T::ResultStake::get();
 
             // Lock result stake
-            <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+            T::Currency::transfer(
                 &who,
                 &Self::account_id(),
                 result_stake,
@@ -441,7 +443,7 @@ pub mod pallet {
                 let developer = result.developer.clone();
                 let stake = result.stake_amount;
 
-                <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                T::Currency::transfer(
                     &Self::account_id(),
                     &developer,
                     stake,
@@ -483,7 +485,7 @@ pub mod pallet {
                     .mul_floor(query_fee);
 
                 // Transfer query fee
-                <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                T::Currency::transfer(
                     &who,
                     &Self::account_id(),
                     query_fee,
@@ -531,7 +533,7 @@ pub mod pallet {
             let dispute_stake = T::DisputeStake::get();
 
             // Lock challenger stake
-            <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+            T::Currency::transfer(
                 &who,
                 &Self::account_id(),
                 dispute_stake,
@@ -608,7 +610,7 @@ pub mod pallet {
                     let total_pot = result_stake.saturating_add(challenger_stake);
 
                     // Challenger gets their stake back + developer's stake
-                    <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                    T::Currency::transfer(
                         &Self::account_id(),
                         &challenger,
                         total_pot,
@@ -642,7 +644,7 @@ pub mod pallet {
                     // Developer wins, gets challenger's stake
                     let total_pot = result_stake.saturating_add(challenger_stake);
 
-                    <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+                    T::Currency::transfer(
                         &Self::account_id(),
                         &developer,
                         total_pot,
@@ -687,7 +689,7 @@ pub mod pallet {
             let amount = PendingRevenue::<T>::take(&who);
             ensure!(amount > Zero::zero(), Error::<T>::NoRevenueToClaim);
 
-            <pallet_battlechain::pallet::Config as pallet_battlechain::Config>::Currency::transfer(
+            T::Currency::transfer(
                 &Self::account_id(),
                 &who,
                 amount,

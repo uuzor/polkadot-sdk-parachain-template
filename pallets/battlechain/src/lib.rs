@@ -10,7 +10,7 @@
 
 pub use pallet::*;
 
-#[frame::pallet(dev_mode)]
+#[frame::pallet]
 pub mod pallet {
     use frame::prelude::*;
     use sp_runtime::traits::{Hash, Zero, Saturating};
@@ -35,6 +35,19 @@ pub mod pallet {
         Mage,
         Tank,
         Trickster,
+    }
+
+    impl CharacterClass {
+        pub fn from_u8(value: u8) -> Result<Self, ()> {
+            match value {
+                0 => Ok(CharacterClass::Warrior),
+                1 => Ok(CharacterClass::Assassin),
+                2 => Ok(CharacterClass::Mage),
+                3 => Ok(CharacterClass::Tank),
+                4 => Ok(CharacterClass::Trickster),
+                _ => Err(()),
+            }
+        }
     }
 
     /// Battle stance types (affects damage and defense)
@@ -70,7 +83,7 @@ pub mod pallet {
     pub struct Character<T: Config> {
         pub character_id: u64,
         pub owner: T::AccountId,
-        pub class: CharacterClass,
+        pub class_id: u8,          // 0=Warrior, 1=Assassin, 2=Mage, 3=Tank, 4=Trickster
         pub max_hp: u32,
         pub damage_min: u16,
         pub damage_max: u16,
@@ -181,11 +194,11 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        /// Character created [owner, character_id, class]
+        /// Character created [owner, character_id, class_id]
         CharacterCreated {
             owner: T::AccountId,
             character_id: u64,
-            class: CharacterClass,
+            class_id: u8,
         },
         /// Battle offer created [battle_id, creator, character_id, stake, max_rounds]
         BattleOfferCreated {
@@ -238,6 +251,7 @@ pub mod pallet {
         CannotBattleSelf,
         TooManyCharacters,
         BattleOfferNotFound,
+        InvalidCharacterClass,
     }
 
     // ========== EXTRINSICS ==========
@@ -249,9 +263,12 @@ pub mod pallet {
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn create_character(
             origin: OriginFor<T>,
-            class: CharacterClass,
+            class_id: u8,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
+
+            let class = CharacterClass::from_u8(class_id)
+                .map_err(|_| Error::<T>::InvalidCharacterClass)?;
 
             let character_id = NextCharacterId::<T>::get();
             NextCharacterId::<T>::put(character_id.saturating_add(1));
@@ -267,7 +284,7 @@ pub mod pallet {
             let character = Character {
                 character_id,
                 owner: who.clone(),
-                class: class.clone(),
+                class_id,
                 max_hp,
                 damage_min,
                 damage_max,
@@ -289,7 +306,7 @@ pub mod pallet {
             Self::deposit_event(Event::CharacterCreated {
                 owner: who,
                 character_id,
-                class,
+                class_id,
             });
 
             Ok(())

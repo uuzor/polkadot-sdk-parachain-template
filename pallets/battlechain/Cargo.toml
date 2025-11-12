@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT-0"
 
 [dependencies]
-codec = { workspace = true, features = ["derive"] }
+codec = { workspace = true, features = ["derive", "max-encoded-len"] }
 scale-info = { workspace = true, features = ["derive"] }
 frame = { workspace = true, features = ["experimental", "runtime"] }
 sp-io = { version = "36.0.0", default-features = false }
