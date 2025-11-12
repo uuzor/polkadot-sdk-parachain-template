@@ -331,8 +331,6 @@ impl pallet_parachain_template::Config for Runtime {
 impl pallet_battlechain::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type Currency = Balances;
-	type MaxActiveBattles = ConstU32<10>;
-	type InactivityTimeout = ConstU32<100>; // 100 blocks
 }
 
 /// Configure Prediction Market pallet
