@@ -10,6 +10,12 @@
 
 pub use pallet::*;
 
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
 #[frame::pallet]
 pub mod pallet {
     use frame::prelude::*;

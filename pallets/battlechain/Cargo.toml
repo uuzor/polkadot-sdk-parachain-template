@@ -11,6 +11,9 @@ frame = { workspace = true, features = ["experimental", "runtime"] }
 sp-io = { version = "36.0.0", default-features = false }
 sp-runtime = { version = "41.1.0", default-features = false }
 
+[dev-dependencies]
+pallet-balances = { version = "39.0.0", default-features = false }
+
 [features]
 default = ["std"]
 std = [

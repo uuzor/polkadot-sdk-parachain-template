@@ -14,6 +14,12 @@
 
 pub use pallet::*;
 
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
+
 #[frame::pallet]
 pub mod pallet {
     use frame::prelude::*;
@@ -405,7 +411,16 @@ pub mod pallet {
         #[pallet::weight(Weight::from_parts(10_000, 0))]
         pub fn submit_result(
             origin: OriginFor<T>,
-            result_data: StandardizedResult<T>,
+            battle_id: T::Hash,
+            winner: Option<T::AccountId>,
+            player1: T::AccountId,
+            player2: T::AccountId,
+            player1_score: u32,
+            player2_score: u32,
+            rounds_played: u8,
+            game_name: BoundedVec<u8, ConstU32<32>>,
+            game_version: u32,
+            extension_data: BoundedVec<u8, ConstU32<256>>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
@@ -416,11 +431,11 @@ pub mod pallet {
             );
 
             // Ensure battle exists
-            let _battle = pallet_battlechain::Battles::<T>::get(result_data.battle_id)
+            let _battle = pallet_battlechain::Battles::<T>::get(battle_id)
                 .ok_or(Error::<T>::BattleNotFound)?;
 
             ensure!(
-                !BattleResults::<T>::contains_key(result_data.battle_id),
+                !BattleResults::<T>::contains_key(battle_id),
                 Error::<T>::ResultAlreadyExists
             );
 
@@ -434,12 +449,25 @@ pub mod pallet {
                 frame_support::traits::ExistenceRequirement::KeepAlive,
             )?;
 
-            let result_id = T::Hashing::hash_of(&(&result_data.battle_id, &who, &frame_system::Pallet::<T>::block_number()));
+            // Construct StandardizedResult from individual parameters
+            let result_data = StandardizedResult {
+                battle_id,
+                winner: winner.clone(),
+                player1: player1.clone(),
+                player2: player2.clone(),
+                player1_score,
+                player2_score,
+                rounds_played,
+                timestamp: frame_system::Pallet::<T>::block_number(),
+                game_name: game_name.clone(),
+                game_version,
+                extension_data: extension_data.clone(),
+            };
+
+            let result_id = T::Hashing::hash_of(&(&battle_id, &who, &frame_system::Pallet::<T>::block_number()));
             let data_hash = T::Hashing::hash_of(&result_data);
             let now = frame_system::Pallet::<T>::block_number();
             let dispute_deadline = now.saturating_add(T::DisputePeriod::get());
-
-            let battle_id = result_data.battle_id;
 
             let result = GameResult {
                 result_id,
